@@ -50,9 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_migrations(&db_url).await?;
 
     // create an async connection
-    // let mut connection = AsyncPgConnection::establish(&db_url).await?;
-    let connection = PgConnection::establish(&db_url)?;
-    let mut sync_wrapper = SyncConnectionWrapper::new(connection);
+    let mut sync_wrapper = SyncConnectionWrapper::<PgConnection>::establish(&db_url).await?;
 
     sync_wrapper.batch_execute("DELETE FROM users").await?;
 
