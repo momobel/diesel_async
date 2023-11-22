@@ -1,11 +1,18 @@
 use crate::{AnsiTransactionManager, AsyncConnection, SimpleAsyncConnection};
+use diesel::backend::Backend;
 use diesel::query_builder::{AsQuery, QueryBuilder, QueryFragment, QueryId};
 use diesel::{ConnectionError, ConnectionResult, QueryResult};
 use futures_util::future::BoxFuture;
 use futures_util::stream::{BoxStream, TryStreamExt};
+use futures_util::{Future, FutureExt, StreamExt};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::task::JoinError;
+
+use diesel::pg::{
+    FailedToLookupTypeError, Pg, PgMetadataCache, PgMetadataCacheKey, PgMetadataLookup,
+    PgQueryBuilder, PgTypeMetadata,
+};
 
 fn from_tokio_join_error(join_error: JoinError) -> diesel::result::Error {
     diesel::result::Error::DatabaseError(
@@ -82,7 +89,29 @@ where
     where
         T: QueryFragment<Self::Backend> + QueryId + 'query,
     {
-        unimplemented!()
+        // we explicilty descruct the query here before going into the async block
+        //
+        // That's required to remove the send bound from `T` as we have translated
+        // the query type to just a string (for the SQL) and a bunch of bytes (for the binds)
+        // which both are `Send`.
+        // We also collect the query id (essentially an integer) and the safe_to_cache flag here
+        // so there is no need to even access the query in the async block below
+        let mut query_builder =
+            <<<Self as AsyncConnection>::Backend as Backend>::QueryBuilder as Default>::default();
+        let sql = source
+            .to_sql(&mut query_builder, &Pg)
+            .map(|_| query_builder.finish());
+
+        // let mut bind_collector = RawBytesBindCollector::<diesel::pg::Pg>::new();
+        let query_id = T::query_id();
+
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let sql = sql?;
+            inner.lock().unwrap().execute_returning_count(&source)
+        })
+        .map(|fut| fut.unwrap_or_else(|e| Err(from_tokio_join_error(e))))
+        .boxed()
     }
 
     fn transaction_state(&mut self) -> &mut AnsiTransactionManager {
