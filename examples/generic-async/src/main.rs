@@ -1,8 +1,9 @@
 use diesel::migration::{Migration, MigrationSource};
-use diesel::pg::Pg;
+use diesel::pg::{Pg, PgConnection};
 use diesel::prelude::*;
 use diesel_async::async_connection_wrapper::AsyncConnectionWrapper;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+use diesel_async::sync_connection_wrapper::SyncConnectionWrapper;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, SimpleAsyncConnection};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 
 // ordinary diesel model setup
@@ -49,29 +50,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_migrations(&db_url).await?;
 
     // create an async connection
-    let mut connection = AsyncPgConnection::establish(&db_url).await?;
+    // let mut connection = AsyncPgConnection::establish(&db_url).await?;
+    let connection = PgConnection::establish(&db_url)?;
+    let mut sync_wrapper = SyncConnectionWrapper::new(connection);
+
+    sync_wrapper.batch_execute("DELETE FROM users").await?;
+
+    sync_wrapper
+        .batch_execute("INSERT INTO users(id, name) VALUES (3, 'toto')")
+        .await?;
 
     // ensure table is empty
-    diesel::delete(users::table)
-        .execute(&mut connection)
-        .await?;
+    // diesel::delete(users::table)
+    //     .execute(&mut connection)
+    //     .await?;
 
-    diesel::insert_into(users::table)
-        .values((users::id.eq(1), users::name.eq("iLuke")))
-        .execute(&mut connection)
-        .await?;
+    // diesel::insert_into(users::table)
+    //     .values((users::id.eq(1), users::name.eq("iLuke")))
+    //     .execute(&mut connection)
+    //     .await?;
 
-    // use ordinary diesel query dsl to construct your query
-    let data: Vec<User> = users::table
-        .filter(users::id.gt(0))
-        .or_filter(users::name.like("%Luke"))
-        .select(User::as_select())
-        // execute the query via the provided
-        // async `diesel_async::RunQueryDsl`
-        .load(&mut connection)
-        .await?;
-
-    println!("{data:?}");
+    // // use ordinary diesel query dsl to construct your query
+    // let data: Vec<User> = users::table
+    //     .filter(users::id.gt(0))
+    //     .or_filter(users::name.like("%Luke"))
+    //     .select(User::as_select())
+    //     // execute the query via the provided
+    //     // async `diesel_async::RunQueryDsl`
+    //     .load(&mut connection)
+    //     .await?;
+    //
+    // println!("{data:?}");
 
     Ok(())
 }

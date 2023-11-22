@@ -93,6 +93,7 @@ pub mod pg;
 pub mod pooled_connection;
 mod run_query_dsl;
 mod stmt_cache;
+pub mod sync_connection_wrapper;
 mod transaction_manager;
 
 #[cfg(feature = "mysql")]
