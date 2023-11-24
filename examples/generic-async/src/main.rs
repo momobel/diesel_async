@@ -58,14 +58,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .batch_execute("INSERT INTO users(id, name) VALUES (3, 'toto')")
         .await?;
 
-    // ensure table is empty
-    // diesel::delete(users::table)
-    //     .execute(&mut connection)
-    //     .await?;
+    diesel::delete(users::table)
+        .execute(&mut sync_wrapper)
+        .await?;
 
     // diesel::insert_into(users::table)
     //     .values((users::id.eq(1), users::name.eq("iLuke")))
-    //     .execute(&mut connection)
+    //     .execute(&mut sync_wrapper)
     //     .await?;
 
     // // use ordinary diesel query dsl to construct your query

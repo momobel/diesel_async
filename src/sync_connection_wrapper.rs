@@ -1,18 +1,13 @@
 use crate::{AnsiTransactionManager, AsyncConnection, SimpleAsyncConnection};
 use diesel::backend::Backend;
 use diesel::query_builder::{AsQuery, QueryBuilder, QueryFragment, QueryId};
-use diesel::{ConnectionError, ConnectionResult, QueryResult};
+use diesel::{Connection, ConnectionError, ConnectionResult, QueryResult};
 use futures_util::future::BoxFuture;
 use futures_util::stream::{BoxStream, TryStreamExt};
 use futures_util::{Future, FutureExt, StreamExt};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::task::JoinError;
-
-use diesel::pg::{
-    FailedToLookupTypeError, Pg, PgMetadataCache, PgMetadataCacheKey, PgMetadataLookup,
-    PgQueryBuilder, PgTypeMetadata,
-};
 
 fn from_tokio_join_error(join_error: JoinError) -> diesel::result::Error {
     diesel::result::Error::DatabaseError(
@@ -25,7 +20,7 @@ pub struct SyncConnectionWrapper<C> {
     inner: Arc<Mutex<C>>,
 }
 
-impl<C> SyncConnectionWrapper<C> {
+impl<C: diesel::connection::Connection> SyncConnectionWrapper<C> {
     pub fn new(connection: C) -> Self {
         SyncConnectionWrapper {
             inner: Arc::new(Mutex::new(connection)),
@@ -55,6 +50,9 @@ where
 impl<C> AsyncConnection for SyncConnectionWrapper<C>
 where
     C: diesel::connection::Connection + diesel::connection::LoadConnection + 'static,
+    C: diesel::Connection<Backend = diesel::pg::Pg>,
+    <C as diesel::Connection>::Backend: std::default::Default,
+    <<C as diesel::Connection>::Backend as Backend>::QueryBuilder: std::default::Default,
 {
     type LoadFuture<'conn, 'query> = BoxFuture<'query, QueryResult<Self::Stream<'conn, 'query>>>;
     type ExecuteFuture<'conn, 'query> = BoxFuture<'query, QueryResult<usize>>;
@@ -99,16 +97,17 @@ where
         let mut query_builder =
             <<<Self as AsyncConnection>::Backend as Backend>::QueryBuilder as Default>::default();
         let sql = source
-            .to_sql(&mut query_builder, &Pg)
+            .to_sql(
+                &mut query_builder,
+                &<Self as AsyncConnection>::Backend::default(),
+            )
             .map(|_| query_builder.finish());
-
-        // let mut bind_collector = RawBytesBindCollector::<diesel::pg::Pg>::new();
-        let query_id = T::query_id();
+        println!("{:?}", sql);
 
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let sql = sql?;
-            inner.lock().unwrap().execute_returning_count(&source)
+            let sql = diesel::sql_query(sql?);
+            inner.lock().unwrap().execute_returning_count(&sql)
         })
         .map(|fut| fut.unwrap_or_else(|e| Err(from_tokio_join_error(e))))
         .boxed()
