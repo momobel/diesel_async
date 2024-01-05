@@ -39,7 +39,7 @@ default = []
 mysql = ["diesel/mysql_backend", "mysql_async", "mysql_common", "futures-channel", "tokio"]
 postgres = ["diesel/postgres_backend", "tokio-postgres", "tokio", "tokio/rt"]
 sqlite = []
-sync-connection-wrapper = ["tokio"]
+sync-connection-wrapper = ["tokio/rt"]
 async-connection-wrapper = []
 r2d2 = ["diesel/r2d2"]
 
@@ -61,3 +61,6 @@ members = [
         "examples/postgres/run-pending-migrations-with-rustls",
         "examples/generic-async",
 ]
+
+[patch.crates-io]
+diesel = { path = "../diesel/diesel" }
