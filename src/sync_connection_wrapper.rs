@@ -1,12 +1,15 @@
 use crate::{AnsiTransactionManager, AsyncConnection, SimpleAsyncConnection};
 use diesel::backend::Backend;
 use diesel::connection::LoadConnection;
-use diesel::query_builder::{AsQuery, QueryBuilder, QueryFragment, QueryId};
+use diesel::query_builder::{
+    AsQuery, BindCollector, CollectedQuery, MovableBindCollector, QueryBuilder, QueryFragment,
+    QueryId,
+};
 use diesel::sql_types::TypeMetadata;
 use diesel::{Connection, ConnectionResult, QueryResult};
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
-use futures_util::FutureExt;
+use futures_util::{Future, FutureExt, StreamExt};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::task::JoinError;
@@ -28,7 +31,65 @@ impl<C: diesel::connection::Connection> SyncConnectionWrapper<C> {
             inner: Arc::new(Mutex::new(connection)),
         }
     }
+
+    //     fn with_prepared_statement<'a, T, F, R>(
+    //         &self,
+    //         query: T,
+    //         callback: impl FnOnce(&mut C, CollectedQuery<<<<C as diesel::Connection>::Backend as Backend>::BindCollector<'_> as MovableBindCollector<C::Backend>>::MovableData>) -> QueryResult<R> + Send + 'a,
+    //     ) -> F
+    //     where
+    //         C: diesel::connection::Connection
+    //             + diesel::connection::LoadConnection
+    //             + WithMetadataLookup
+    //             + 'static,
+    //         <C as diesel::Connection>::Backend:
+    //             std::default::Default + diesel::backend::DieselReserveSpecialization,
+    //         <<C as diesel::Connection>::Backend as Backend>::QueryBuilder: std::default::Default,
+    //         for<'bc> <<C as diesel::Connection>::Backend as Backend>::BindCollector<'bc>:
+    //             std::default::Default + MovableBindCollector<C::Backend>,
+    //         T: QueryFragment<<C as diesel::Connection>::Backend> + QueryId,
+    //         F: Future<Output = QueryResult<R>> + Send,
+    //         R: Send,
+    //     {
+    //         let (collect_bind_result, movable_collector) = {
+    //             let exclusive = self.inner.clone();
+    //             let mut inner = exclusive.lock().unwrap();
+    //             let backend = <C as Connection>::Backend::default();
+    //             let mut bind_collector =
+    //                 <<<C as Connection>::Backend as Backend>::BindCollector<'_> as Default>::default();
+    //             let mut metadata_lookup = inner.metadata_lookup();
+    //             // value in source could be stored in bind_collector
+    //             // source must live at least as long as bind collector
+    //             let result = query.collect_binds(&mut bind_collector, &mut metadata_lookup, &backend);
+    //             let movable_collector = bind_collector.movable();
+    //             (result, movable_collector)
+    //         };
+    //         let backend = <C as Connection>::Backend::default();
+    //         let mut query_builder =
+    //             <<<Self as AsyncConnection>::Backend as Backend>::QueryBuilder as Default>::default();
+    //         let sql = query
+    //             .to_sql(&mut query_builder, &backend)
+    //             .map(|_| query_builder.finish());
+    //         println!("Generated SQL '{:?}'", sql);
+    //         let is_safe_to_cache_prepared = query.is_safe_to_cache_prepared(&backend);
+
+    //         let inner = self.inner.clone();
+    //         tokio::task::spawn_blocking(move || {
+    //             // collect_bind_result?;
+    //             let query = CollectedQuery::new(sql?, is_safe_to_cache_prepared?, movable_collector);
+    //             let mut inner = inner.lock().unwrap();
+    //             // inner.execute_returning_count(&query)
+    //             callback(&mut inner, query)
+    //             // Ok(0)
+    //         })
+    //         .map(|fut| fut.unwrap_or_else(|e| Err(from_tokio_join_error(e))))
+    //         .boxed()
+    //     }
 }
+
+// struct PreparedQuery<DB: Backend, T> {
+//     movable_collector: T,
+// }
 
 trait WithMetadataLookup: Connection {
     fn metadata_lookup(&mut self) -> &mut <Self::Backend as TypeMetadata>::MetadataLookup;
