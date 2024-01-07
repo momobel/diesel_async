@@ -1,7 +1,10 @@
 use crate::{AnsiTransactionManager, AsyncConnection, SimpleAsyncConnection};
 use diesel::backend::Backend;
 use diesel::connection::LoadConnection;
-use diesel::query_builder::{AsQuery, QueryBuilder, QueryFragment, QueryId};
+use diesel::query_builder::{
+    AsQuery, BindCollector, CollectedQuery, MovableBindCollector, QueryBuilder, QueryFragment,
+    QueryId,
+};
 use diesel::sql_types::TypeMetadata;
 use diesel::{Connection, ConnectionResult, QueryResult};
 use futures_util::future::BoxFuture;
@@ -77,6 +80,8 @@ where
     }
 }
 
+// use diesel::pg::Pg;
+
 #[async_trait::async_trait]
 impl<C> AsyncConnection for SyncConnectionWrapper<C>
 where
@@ -84,6 +89,7 @@ where
         + diesel::connection::LoadConnection
         + WithMetadataLookup
         + 'static,
+    // C: diesel::Connection<Backend = Pg>,
     <C as diesel::Connection>::Backend:
         std::default::Default + diesel::backend::DieselReserveSpecialization,
     <<C as diesel::Connection>::Backend as Backend>::QueryBuilder: std::default::Default,
