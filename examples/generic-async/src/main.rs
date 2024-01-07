@@ -101,9 +101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     .select(User::as_select())
     //     // execute the query via the provided
     //     // async `diesel_async::RunQueryDsl`
-    //     .load(&mut connection)
+    //     .load(&mut sync_wrapper)
     //     .await?;
-    //
     // println!("{data:?}");
 
     Ok(())
