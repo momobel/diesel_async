@@ -139,8 +139,6 @@ where
                 '_,
             > as Default>::default();
             let mut metadata_lookup = inner.metadata_lookup();
-            // value in source could be stored in bind_collector
-            // source must live at least as long as bind collector
             let result = source.collect_binds(&mut bind_collector, metadata_lookup, &backend);
             let movable_collector = bind_collector.movable();
 
@@ -169,7 +167,6 @@ where
             let query = CollectedQuery::new(sql?, is_safe_to_cache_prepared?, movable_collector);
             let mut inner = inner.lock().unwrap();
             inner.execute_returning_count(&query)
-            // Ok(0)
         })
         .map(|fut| fut.unwrap_or_else(|e| Err(from_tokio_join_error(e))))
         .boxed()
