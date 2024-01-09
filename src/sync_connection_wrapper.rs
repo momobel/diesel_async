@@ -21,11 +21,14 @@ fn from_tokio_join_error(join_error: JoinError) -> diesel::result::Error {
     )
 }
 
-pub struct SyncConnectionWrapper<C> {
+pub struct SyncConnectionWrapper<C, B>
+    where
+        B: diesel::backend::Backend,
+        C: diesel::Connection<Backend=B> {
     inner: Arc<Mutex<C>>,
 }
 
-impl<C: diesel::connection::Connection> SyncConnectionWrapper<C> {
+impl<B: diesel::backend::Backend, C: diesel::connection::Connection<Backend=B>> SyncConnectionWrapper<C, B> {
     pub fn new(connection: C) -> Self {
         SyncConnectionWrapper {
             inner: Arc::new(Mutex::new(connection)),
@@ -39,10 +42,11 @@ trait WithMetadataLookup: Connection {
 
 #[cfg(feature = "sqlite")]
 static mut SQLITE_METADATA_LOOKUP: () = ();
+
 #[cfg(feature = "sqlite")]
 impl<C> WithMetadataLookup for C
-where
-    C: diesel::connection::Connection<Backend = diesel::sqlite::Sqlite>,
+    where
+        C: diesel::connection::Connection<Backend=diesel::sqlite::Sqlite>,
 {
     fn metadata_lookup(&mut self) -> &mut <Self::Backend as TypeMetadata>::MetadataLookup {
         // safe since it's unit type
@@ -52,8 +56,8 @@ where
 
 #[cfg(feature = "postgres")]
 impl<C> WithMetadataLookup for C
-where
-    C: diesel::connection::Connection<Backend = diesel::pg::Pg>
+    where
+        C: diesel::connection::Connection<Backend=diesel::pg::Pg>
         + diesel::pg::PgMetadataLookup
         + 'static,
 {
@@ -63,9 +67,10 @@ where
 }
 
 #[async_trait::async_trait]
-impl<C> SimpleAsyncConnection for SyncConnectionWrapper<C>
-where
-    C: diesel::connection::Connection + 'static,
+impl<C, B> SimpleAsyncConnection for SyncConnectionWrapper<C, B>
+    where
+        B: diesel::backend::Backend,
+        C: diesel::connection::Connection<Backend=B> + 'static,
 {
     async fn batch_execute(&mut self, query: &str) -> QueryResult<()> {
         // JoinHandle has Output=Future<Result<QueryResult, JoinError>>
@@ -83,18 +88,15 @@ where
 use diesel::pg::Pg;
 
 #[async_trait::async_trait]
-impl<C> AsyncConnection for SyncConnectionWrapper<C>
-where
-    C: diesel::connection::Connection
+impl<'a, C, B> AsyncConnection for SyncConnectionWrapper<C, B>
+    where
+        B: diesel::backend::Backend + std::default::Default + diesel::backend::DieselReserveSpecialization,
+        B::QueryBuilder: QueryBuilder<B> + std::default::Default,
+        B::BindCollector<'a>: MovableBindCollector<B> + std::default::Default,
+        C: diesel::connection::Connection<Backend=B>
         + diesel::connection::LoadConnection
         + WithMetadataLookup
         + 'static,
-    C: diesel::Connection<Backend = Pg>,
-    <C as diesel::Connection>::Backend:
-        std::default::Default + diesel::backend::DieselReserveSpecialization,
-    <<C as diesel::Connection>::Backend as Backend>::QueryBuilder: std::default::Default,
-    for<'a> <<C as diesel::Connection>::Backend as Backend>::BindCollector<'a>:
-        std::default::Default + MovableBindCollector<C::Backend>,
 {
     type LoadFuture<'conn, 'query> = BoxFuture<'query, QueryResult<Self::Stream<'conn, 'query>>>;
     type ExecuteFuture<'conn, 'query> = BoxFuture<'query, QueryResult<usize>>;
@@ -103,7 +105,7 @@ where
         QueryResult<<C as diesel::connection::LoadConnection>::Row<'conn, 'query>>,
     >;
     type Row<'conn, 'query> = <C as diesel::connection::LoadConnection>::Row<'conn, 'query>;
-    type Backend = C::Backend;
+    type Backend = B;
     type TransactionManager = AnsiTransactionManager;
 
     async fn establish(database_url: &str) -> ConnectionResult<Self> {
@@ -115,19 +117,19 @@ where
     }
 
     fn load<'conn, 'query, T>(&'conn mut self, _source: T) -> Self::LoadFuture<'conn, 'query>
-    where
-        T: AsQuery + 'query,
-        T::Query: QueryFragment<Self::Backend> + QueryId + 'query,
+        where
+            T: AsQuery + 'query,
+            T::Query: QueryFragment<Self::Backend> + QueryId + 'query,
     {
         unimplemented!()
     }
 
-    fn execute_returning_count<'conn, 'query, T>(
+    fn execute_returning_count<'conn, 'query, T: QueryFragment<Self::Backend>>(
         &'conn mut self,
         source: T,
     ) -> Self::ExecuteFuture<'conn, 'query>
-    where
-        T: QueryFragment<Self::Backend> + QueryId + 'query,
+        where
+            T: QueryFragment<Self::Backend> + QueryId,
     {
         let backend = <Self as AsyncConnection>::Backend::default();
 
@@ -135,7 +137,7 @@ where
             let exclusive = self.inner.clone();
             let mut inner = exclusive.lock().unwrap();
             let mut bind_collector = <<<Self as AsyncConnection>::Backend as Backend>::BindCollector<
-                '_,
+                'a,
             > as Default>::default();
             let mut metadata_lookup = inner.metadata_lookup();
             // value in source could be stored in bind_collector
@@ -144,8 +146,7 @@ where
             let movable_collector = bind_collector.movable();
 
             let mut query_builder =
-                <<<Self as AsyncConnection>::Backend as Backend>::QueryBuilder as Default>::default(
-                );
+                <<<Self as AsyncConnection>::Backend as Backend>::QueryBuilder as Default>::default();
             let sql = source
                 .to_sql(&mut query_builder, &backend)
                 .map(|_| query_builder.finish());
@@ -170,8 +171,8 @@ where
             inner.execute_returning_count(&query)
             // Ok(0)
         })
-        .map(|fut| fut.unwrap_or_else(|e| Err(from_tokio_join_error(e))))
-        .boxed()
+            .map(|fut| fut.unwrap_or_else(|e| Err(from_tokio_join_error(e))))
+            .boxed()
     }
 
     fn transaction_state(&mut self) -> &mut AnsiTransactionManager {
