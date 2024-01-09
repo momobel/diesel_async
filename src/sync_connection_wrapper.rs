@@ -86,13 +86,15 @@ impl<C, B> SimpleAsyncConnection for SyncConnectionWrapper<C, B>
 }
 
 use diesel::pg::Pg;
+use diesel::query_builder::bind_collector::SendableCollector;
 
 #[async_trait::async_trait]
-impl<'a, C, B> AsyncConnection for SyncConnectionWrapper<C, B>
+impl<C, B, MD> AsyncConnection for SyncConnectionWrapper<C, B>
     where
+        MD: SendableCollector,
         B: diesel::backend::Backend + std::default::Default + diesel::backend::DieselReserveSpecialization,
         B::QueryBuilder: QueryBuilder<B> + std::default::Default,
-        B::BindCollector<'a>: MovableBindCollector<B> + std::default::Default,
+        for<'a> B::BindCollector<'a>: MovableBindCollector<B, MovableData=MD> + std::default::Default,
         C: diesel::connection::Connection<Backend=B>
         + diesel::connection::LoadConnection
         + WithMetadataLookup
@@ -124,7 +126,7 @@ impl<'a, C, B> AsyncConnection for SyncConnectionWrapper<C, B>
         unimplemented!()
     }
 
-    fn execute_returning_count<'conn, 'query, T: QueryFragment<Self::Backend>>(
+    fn execute_returning_count<'conn, 'query, T>(
         &'conn mut self,
         source: T,
     ) -> Self::ExecuteFuture<'conn, 'query>
@@ -137,7 +139,7 @@ impl<'a, C, B> AsyncConnection for SyncConnectionWrapper<C, B>
             let exclusive = self.inner.clone();
             let mut inner = exclusive.lock().unwrap();
             let mut bind_collector = <<<Self as AsyncConnection>::Backend as Backend>::BindCollector<
-                'a,
+                '_,
             > as Default>::default();
             let mut metadata_lookup = inner.metadata_lookup();
             // value in source could be stored in bind_collector
