@@ -142,14 +142,6 @@ where
             let result = source.collect_binds(&mut bind_collector, metadata_lookup, &backend);
             let movable_collector = bind_collector.movable();
 
-            let mut query_builder =
-                <<<Self as AsyncConnection>::Backend as Backend>::QueryBuilder as Default>::default(
-                );
-            let sql = source
-                .to_sql(&mut query_builder, &backend)
-                .map(|_| query_builder.finish());
-            println!("Generated SQL '{:?}'", sql);
-
             (result, movable_collector)
         };
 
