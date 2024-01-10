@@ -138,7 +138,7 @@ where
             let mut bind_collector = <<<Self as AsyncConnection>::Backend as Backend>::BindCollector<
                 '_,
             > as Default>::default();
-            let mut metadata_lookup = inner.metadata_lookup();
+            let metadata_lookup = inner.metadata_lookup();
             let result = source.collect_binds(&mut bind_collector, metadata_lookup, &backend);
             let movable_collector = bind_collector.movable();
 
