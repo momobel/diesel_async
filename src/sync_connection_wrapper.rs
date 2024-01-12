@@ -2,14 +2,14 @@ use crate::{AnsiTransactionManager, AsyncConnection, SimpleAsyncConnection};
 use diesel::backend::Backend;
 use diesel::connection::LoadConnection;
 use diesel::query_builder::{
-    AsQuery, BindCollector, CollectedQuery, MovableBindCollector, QueryBuilder, QueryFragment,
-    QueryId,
+    AsQuery, BindCollector, CollectedLoadQuery, CollectedQuery, MovableBindCollector, QueryBuilder,
+    QueryFragment, QueryId,
 };
 use diesel::sql_types::TypeMetadata;
 use diesel::{Connection, ConnectionResult, QueryResult};
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
-use futures_util::FutureExt;
+use futures_util::{FutureExt, StreamExt, TryFutureExt};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::task::JoinError;
@@ -83,6 +83,47 @@ where
 
 use diesel::query_builder::bind_collector::SendableCollector;
 
+struct LoadedCursor<'conn, 'query, C, T>
+where
+    // 'conn: 'query,
+    // Self: 'query,
+    C: diesel::connection::LoadConnection + 'conn,
+{
+    query: CollectedLoadQuery<T>,
+    cursor: <C as LoadConnection>::Cursor<'conn, 'query>,
+}
+
+impl<'conn, 'query, C, T> LoadedCursor<'conn, 'query, C, T>
+where
+    C: diesel::connection::Connection,
+    C: diesel::connection::LoadConnection,
+    <<C as Connection>::Backend as Backend>::BindCollector<'query>:, // Self: 'conn
+{
+    // pub fn new<'a>(
+    pub fn new(
+        query: CollectedLoadQuery<T>,
+        cursor: <C as LoadConnection>::Cursor<'conn, 'query>,
+    ) -> Self
+// ) -> LoadedCursor<'a, 'a, C, T>
+    // where
+    //     'conn: 'a,
+    //     'query: 'a,
+    {
+        LoadedCursor { query, cursor }
+    }
+}
+
+impl<'conn, 'query, C, T> Iterator for LoadedCursor<'conn, 'query, C, T>
+where
+    C: diesel::connection::LoadConnection + 'conn,
+{
+    type Item = <<C as LoadConnection>::Cursor<'conn, 'query> as Iterator>::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.cursor.next()
+    }
+}
+
 #[async_trait::async_trait]
 impl<C, MD> AsyncConnection for SyncConnectionWrapper<C>
 where
@@ -90,6 +131,9 @@ where
         + diesel::connection::LoadConnection
         + WithMetadataLookup
         + 'static,
+    // for loading data, most likely won't apply to Sqlite...
+    for<'conn, 'query> <C as LoadConnection>::Cursor<'conn, 'query>: Send,
+    for<'conn, 'query> <C as LoadConnection>::Row<'conn, 'query>: Send,
     <C as Connection>::Backend:
         std::default::Default + diesel::backend::DieselReserveSpecialization,
     <C::Backend as Backend>::QueryBuilder: std::default::Default,
@@ -115,12 +159,84 @@ where
             .map(|c| SyncConnectionWrapper::new(c))
     }
 
-    fn load<'conn, 'query, T>(&'conn mut self, _source: T) -> Self::LoadFuture<'conn, 'query>
+    fn load<'conn, 'query, T>(&'conn mut self, source: T) -> Self::LoadFuture<'conn, 'query>
     where
         T: AsQuery + 'query,
         T::Query: QueryFragment<Self::Backend> + QueryId + 'query,
     {
-        unimplemented!()
+        let query = source.as_query();
+        let backend = <Self as AsyncConnection>::Backend::default();
+
+        let (collect_bind_result, movable_collector) = {
+            let exclusive = self.inner.clone();
+            let mut inner = exclusive.lock().unwrap();
+            let mut bind_collector = <<<Self as AsyncConnection>::Backend as Backend>::BindCollector<
+                '_,
+            > as Default>::default();
+            let metadata_lookup = inner.metadata_lookup();
+            let result = query.collect_binds(&mut bind_collector, metadata_lookup, &backend);
+            let movable_collector = bind_collector.movable();
+
+            (result, movable_collector)
+        };
+
+        let mut query_builder =
+            <<<Self as AsyncConnection>::Backend as Backend>::QueryBuilder as Default>::default();
+        let sql = query
+            .to_sql(&mut query_builder, &backend)
+            .map(|_| query_builder.finish());
+        println!("Generated SQL '{:?}'", sql);
+        let is_safe_to_cache_prepared = query.is_safe_to_cache_prepared(&backend);
+
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            collect_bind_result?;
+            let query =
+                CollectedLoadQuery::new(sql?, is_safe_to_cache_prepared?, movable_collector);
+            let mut inner = inner.lock().unwrap();
+            // fn load<'conn, 'query, T>(
+            //     &'conn mut self,
+            //     source: T,
+            // ) -> QueryResult<Self::Cursor<'conn, 'query>>
+            // where
+            //     T: Query + QueryFragment<Self::Backend> + QueryId + 'query,
+            //     Self::Backend: QueryMetadata<T::SqlType>;
+            use diesel::row::Row;
+            // let cursor = inner.load(&query);
+            let result = inner.load(&query);
+            let loaded = match result {
+                Ok(cursor) => {
+                    QueryResult::Ok(LoadedCursor::<'conn, 'query, C, _>::new(query, cursor))
+                }
+                Err(e) => QueryResult::Err(e),
+            };
+            // let result = result.map(|rows| rows.collect::<Vec<_>>());
+            loaded
+            // for (idx, r) in rows.iter().enumerate() {
+            //     println!("{}: {}", idx, r.as_ref().unwrap().field_count());
+            // }
+            // let query_with_cursor : QueryResult = LoadedQuery(query, cursor);
+            // QueryResult::Err(diesel::result::Error::NotFound)
+            // get from inner.load QueryResult<Cursor>
+            // want return QueryResult<Stream<QueryResult<Row>>>
+            // type LoadFuture<'conn, 'query> = BoxFuture<'query, QueryResult<Self::Stream<'conn, 'query>>>;
+            // type ExecuteFuture<'conn, 'query> = BoxFuture<'query, QueryResult<usize>>;
+            // type Stream<'conn, 'query> = BoxStream<
+            //     'static,
+            //     QueryResult<<C as diesel::connection::LoadConnection>::Row<'conn, 'query>>,
+            // >;
+            // type Row<'conn, 'query> = <C as diesel::connection::LoadConnection>::Row<'conn, 'query>;
+
+            // then convert iterator to stream
+            // https://docs.rs/futures/latest/futures/stream/fn.iter.html
+        })
+        // .map(|_: Result<Result<(), diesel::result::Error>, JoinError>| {
+        //     QueryResult::Err(diesel::result::Error::NotFound)
+        // })
+        // .map(|join| join.)
+        .map_ok(|result| result.map(|rows| futures_util::stream::iter(rows).boxed()))
+        .unwrap_or_else(|join_err| QueryResult::Err(from_tokio_join_error(join_err)))
+        .boxed()
     }
 
     fn execute_returning_count<'conn, 'query, T>(
