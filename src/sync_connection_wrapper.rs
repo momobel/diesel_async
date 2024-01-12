@@ -201,39 +201,19 @@ where
             // where
             //     T: Query + QueryFragment<Self::Backend> + QueryId + 'query,
             //     Self::Backend: QueryMetadata<T::SqlType>;
-            use diesel::row::Row;
-            // let cursor = inner.load(&query);
-            let result = inner.load(&query);
-            let loaded = match result {
-                Ok(cursor) => {
-                    QueryResult::Ok(LoadedCursor::<'conn, 'query, C, _>::new(query, cursor))
+            let loaded = {
+                let result = inner.load(&query);
+                match result {
+                    Ok(cursor) => {
+                        QueryResult::Ok(LoadedCursor::<'conn, 'query, C, _>::new(query, cursor))
+                    }
+                    Err(e) => QueryResult::Err(e),
                 }
-                Err(e) => QueryResult::Err(e),
             };
-            // let result = result.map(|rows| rows.collect::<Vec<_>>());
             loaded
-            // for (idx, r) in rows.iter().enumerate() {
-            //     println!("{}: {}", idx, r.as_ref().unwrap().field_count());
-            // }
-            // let query_with_cursor : QueryResult = LoadedQuery(query, cursor);
-            // QueryResult::Err(diesel::result::Error::NotFound)
-            // get from inner.load QueryResult<Cursor>
-            // want return QueryResult<Stream<QueryResult<Row>>>
-            // type LoadFuture<'conn, 'query> = BoxFuture<'query, QueryResult<Self::Stream<'conn, 'query>>>;
-            // type ExecuteFuture<'conn, 'query> = BoxFuture<'query, QueryResult<usize>>;
-            // type Stream<'conn, 'query> = BoxStream<
-            //     'static,
-            //     QueryResult<<C as diesel::connection::LoadConnection>::Row<'conn, 'query>>,
-            // >;
-            // type Row<'conn, 'query> = <C as diesel::connection::LoadConnection>::Row<'conn, 'query>;
-
-            // then convert iterator to stream
-            // https://docs.rs/futures/latest/futures/stream/fn.iter.html
         })
-        // .map(|_: Result<Result<(), diesel::result::Error>, JoinError>| {
-        //     QueryResult::Err(diesel::result::Error::NotFound)
-        // })
-        // .map(|join| join.)
+        // then convert iterator to stream
+        // https://docs.rs/futures/latest/futures/stream/fn.iter.html
         .map_ok(|result| result.map(|rows| futures_util::stream::iter(rows).boxed()))
         .unwrap_or_else(|join_err| QueryResult::Err(from_tokio_join_error(join_err)))
         .boxed()
